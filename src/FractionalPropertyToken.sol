@@ -3,17 +3,17 @@ pragma solidity ^0.8.0;
 
 import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
-import "./PropertyToken.sol";
+import "./PropertyNFT.sol";
 
 contract FractionalOwnership is ERC20, Ownable {
-    PropertyToken public propertyTokenContract;
+    PropertyNFT public propertyTokenContract;
 
     // Mapping from property ID to the total fractional tokens issued
     mapping(uint256 => uint256) public totalFractionsIssued;
 
     // Constructor to set the token name, symbol, and property token contract
     constructor(address _propertyTokenContract) ERC20("FractionalPropertyToken", "FPT") {
-        propertyTokenContract = PropertyToken(_propertyTokenContract);
+        propertyTokenContract = PropertyNFT(_propertyTokenContract);
     }
 
     // Function to issue fractional tokens for a specific property
