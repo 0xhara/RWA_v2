@@ -13,22 +13,18 @@ contract Marketplace is Ownable {
         uint256 assetId;
         address seller;
         uint256 shareAmount;
-        uint256 price;
-        bool isAuction;
+        uint256 minPrice; // Minimum acceptable price
+        uint256 highestBid;
+        address highestBidder;
+        uint256 deadline; // Auction deadline
         bool isSold;
-    }
-
-    struct AuctionBid {
-        address bidder;
-        uint256 bidAmount;
     }
 
     uint256 public nextListingId;
     mapping(uint256 => Listing) public listings;
-    mapping(uint256 => AuctionBid[]) public auctionBids;
 
-    event ListingCreated(uint256 indexed listingId, uint256 assetId, address seller, uint256 shareAmount, uint256 price, bool isAuction);
-    event BidPlaced(uint256 indexed listingId, address indexed bidder, uint256 bidAmount);
+    event ListingCreated(uint256 indexed listingId, uint256 assetId, address seller, uint256 shareAmount, uint256 minPrice, uint256 deadline);
+    event NewBid(uint256 indexed listingId, address bidder, uint256 bidAmount);
     event ListingSold(uint256 indexed listingId, address buyer, uint256 salePrice);
 
     constructor(address _assetListing, address _usdc) {
@@ -36,75 +32,62 @@ contract Marketplace is Ownable {
         usdc = IERC20(_usdc);
     }
 
-    // Create a listing for reselling shares
-    function createListing(uint256 assetId, uint256 shareAmount, uint256 price, bool isAuction) external {
+    // Create a listing for reselling shares with a minimum price and a deadline
+    function createListing(uint256 assetId, uint256 shareAmount, uint256 minPrice, uint256 duration) external {
         require(assetListing.ownershipShares(assetId, msg.sender) >= shareAmount, "Insufficient ownership");
+
+        uint256 deadline = block.timestamp + duration;
 
         listings[nextListingId] = Listing({
             assetId: assetId,
             seller: msg.sender,
             shareAmount: shareAmount,
-            price: price,
-            isAuction: isAuction,
+            minPrice: minPrice,
+            highestBid: 0,
+            highestBidder: address(0),
+            deadline: deadline,
             isSold: false
         });
 
-        emit ListingCreated(nextListingId, assetId, msg.sender, shareAmount, price, isAuction);
+        emit ListingCreated(nextListingId, assetId, msg.sender, shareAmount, minPrice, deadline);
         nextListingId++;
     }
 
-    // Buy shares from a listing (for fixed price listings)
-    function buyListing(uint256 listingId) external {
-        Listing storage listing = listings[listingId];
-        require(!listing.isAuction, "Listing is for auction");
-        require(!listing.isSold, "Listing already sold");
-
-        require(usdc.transferFrom(msg.sender, listing.seller, listing.price), "Payment failed");
-        assetListing.transferOwnership(listing.assetId, listing.seller, msg.sender, listing.shareAmount);
-
-        listing.isSold = true;
-
-        emit ListingSold(listingId, msg.sender, listing.price);
-    }
-
-    // Place a bid on an auction listing
+    // Function to bid on a listing
     function placeBid(uint256 listingId, uint256 bidAmount) external {
         Listing storage listing = listings[listingId];
-        require(listing.isAuction, "Listing is not for auction");
-        require(!listing.isSold, "Listing already sold");
+        require(block.timestamp < listing.deadline, "Auction ended");
+        require(bidAmount >= listing.minPrice, "Bid is below minimum price");
+        // require(bidAmount > listing.highestBid || (bidAmount == listing.highestBid && msg.sender == listing.highestBidder), "There is a higher or equal bid already");
 
-        auctionBids[listingId].push(AuctionBid({
-            bidder: msg.sender,
-            bidAmount: bidAmount
-        }));
+        // If the bid amount is equal to the current highest bid, the earliest bid wins (FCFS)
+        if (bidAmount > listing.highestBid || (bidAmount == listing.highestBid && listing.highestBidder == address(0))) {
+            listing.highestBid = bidAmount;
+            listing.highestBidder = msg.sender;
 
-        emit BidPlaced(listingId, msg.sender, bidAmount);
+            emit NewBid(listingId, msg.sender, bidAmount);
+        } else {
+            revert("Bid amount is not higher than the current highest bid");
+        }
     }
 
-    // Seller accepts the highest bid in an auction
-    function acceptHighestBid(uint256 listingId) external {
+    // Function to finalize the sale after the auction deadline
+    function finalizeSale(uint256 listingId) external {
         Listing storage listing = listings[listingId];
-        require(listing.isAuction, "Listing is not for auction");
-        require(msg.sender == listing.seller, "Only seller can accept bids");
+        require(block.timestamp >= listing.deadline, "Auction is still ongoing");
         require(!listing.isSold, "Listing already sold");
 
-        uint256 highestBidAmount = 0;
-        address highestBidder;
+        if (listing.highestBidder != address(0)) {
+            // Transfer the shares
+            assetListing.transferOwnership(listing.assetId, listing.seller, listing.highestBidder, listing.shareAmount);
 
-        for (uint256 i = 0; i < auctionBids[listingId].length; i++) {
-            if (auctionBids[listingId][i].bidAmount > highestBidAmount) {
-                highestBidAmount = auctionBids[listingId][i].bidAmount;
-                highestBidder = auctionBids[listingId][i].bidder;
-            }
+            // Mark as sold and transfer funds to the seller
+            listing.isSold = true;
+            usdc.transferFrom(listing.highestBidder, listing.seller, listing.highestBid);
+
+            emit ListingSold(listingId, listing.highestBidder, listing.highestBid);
+        } else {
+            revert("No bids were placed");
         }
-
-        require(highestBidAmount > 0, "No bids placed");
-
-        require(usdc.transferFrom(highestBidder, listing.seller, highestBidAmount), "Payment failed");
-        assetListing.transferOwnership(listing.assetId, listing.seller, highestBidder, listing.shareAmount);
-
-        listing.isSold = true;
-
-        emit ListingSold(listingId, highestBidder, highestBidAmount);
     }
 }

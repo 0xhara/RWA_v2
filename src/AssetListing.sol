@@ -27,6 +27,7 @@ contract AssetListing is Initializable, Ownable {
     PropertyNFT public propertyNFT;
     IERC20 public usdc;
     address public governanceContractAddress;
+    address public SPVAddress;
 
     event AssetListed(uint256 indexed assetId, address indexed owner, uint256 valuation, uint256 tokenId);
     event OwnershipPurchased(uint256 indexed assetId, address indexed buyer, uint256 ownershipPercentage);
@@ -40,13 +41,15 @@ contract AssetListing is Initializable, Ownable {
         uint256 _listingFeePercentage,
         address _usdc,
         address _propertyNFTAddress,
-        address _governanceContractAddress
+        address _governanceContractAddress,
+        address _SPVAddress
     ) public initializer {
         collateralPercentage = _collateralPercentage;
         listingFeePercentage = _listingFeePercentage;
         usdc = IERC20(_usdc);
         propertyNFT = PropertyNFT(_propertyNFTAddress);
         governanceContractAddress = _governanceContractAddress;
+        SPVAddress = _SPVAddress;
         nextAssetId = 1;
     }
 
@@ -61,17 +64,15 @@ contract AssetListing is Initializable, Ownable {
         require(asset.isListed, "Asset is not listed for sale");
         require(asset.totalOwnershipSold == 10000, "Asset is not fully subscribed");
 
-        // Logic to sell the asset (for example, transferring the NFT to a buyer or executing a sale on behalf of all owners)
-        // Placeholder for sale logic, here we assume the sale price is the asset's valuation
         uint256 salePrice = asset.valuation;
 
-        // Distribute sale proceeds to owners based on their ownership percentage
+        // Ensure the asset owner deposits USDC equivalent to the sale price
+        require(usdc.transferFrom(asset.owner, address(this), salePrice), "USDC deposit failed");
+
         distributeFunds(assetId, salePrice);
 
-        // Emit event for asset sale
         emit AssetSold(assetId, salePrice);
 
-        // After sale, consider the asset de-listed
         asset.isListed = false;
     }
 
@@ -85,11 +86,9 @@ contract AssetListing is Initializable, Ownable {
             uint256 ownershipPercentage = ownershipShares[assetId][owner];
             uint256 amountToDistribute = (totalAmount * ownershipPercentage) / 10000;
             
-            // Transfer the USDC to each owner
             usdc.transfer(owner, amountToDistribute);
         }
 
-        // Emit event for funds distribution
         emit FundsDistributed(assetId, totalAmount);
     }
 
@@ -110,7 +109,7 @@ contract AssetListing is Initializable, Ownable {
             isSingleBuyer: isSingleBuyer,
             collateralAmount: collateral,
             listingFee: listingFee,
-            tokenId: 0, // NFT will be minted in listAsset function
+            tokenId: 0,
             totalOwnershipSold: 0
         });
 
@@ -122,11 +121,9 @@ contract AssetListing is Initializable, Ownable {
         Asset storage asset = assets[assetId];
         require(!asset.isListed, "Asset already listed");
 
-        // Mint the NFT representing the property
         uint256 tokenId = propertyNFT.mint(address(this), tokenURI);
         asset.tokenId = tokenId;
 
-        // Mark the asset as listed
         asset.isListed = true;
 
         emit AssetListed(assetId, asset.owner, asset.valuation, tokenId);
@@ -136,14 +133,12 @@ contract AssetListing is Initializable, Ownable {
     function purchaseEntireAsset(uint256 assetId) external {
         Asset storage asset = assets[assetId];
         require(asset.isListed, "Asset is not listed for sale");
-        require(asset.isSingleBuyer, "Asset is available for fractional ownership only");
+        require(asset.totalOwnershipSold == 0, "Partial ownership already sold");
         require(usdc.balanceOf(msg.sender) >= asset.valuation, "Insufficient USDC to buy the entire asset");
 
-        // Transfer the entire ownership of the NFT to the buyer
         usdc.transferFrom(msg.sender, address(this), asset.valuation);
         propertyNFT.safeTransferFrom(address(this), msg.sender, asset.tokenId);
 
-        // Return the collateral to the original owner
         usdc.transfer(asset.owner, asset.collateralAmount);
 
         emit CollateralReturned(assetId, asset.owner);
@@ -156,14 +151,12 @@ contract AssetListing is Initializable, Ownable {
         require(!asset.isSingleBuyer, "Asset is available only for a single buyer");
         require(usdcAmount > 0, "Purchase amount must be greater than zero");
 
-        uint256 ownershipPercentage = (usdcAmount * 10000) / asset.valuation; // Calculate ownership percentage in basis points
+        uint256 ownershipPercentage = (usdcAmount * 10000) / asset.valuation;
         require(ownershipPercentage > 0, "USDC amount too small for fractional ownership");
         require(asset.totalOwnershipSold + ownershipPercentage <= 10000, "Cannot exceed 100% ownership");
 
-        // Transfer USDC from the buyer to the contract
         usdc.transferFrom(msg.sender, address(this), usdcAmount);
 
-        // Update the user's ownership percentage
         ownershipShares[assetId][msg.sender] += ownershipPercentage;
         asset.totalOwnershipSold += ownershipPercentage;
 
@@ -177,7 +170,8 @@ contract AssetListing is Initializable, Ownable {
         require(!asset.isSingleBuyer, "Asset is available only for a single buyer");
         require(asset.totalOwnershipSold >= 10000, "Asset is not fully subscribed");
 
-        // Return the collateral to the original owner
+        propertyNFT.safeTransferFrom(address(this), SPVAddress, asset.tokenId);
+
         usdc.transfer(asset.owner, asset.collateralAmount);
 
         emit CollateralReturned(assetId, asset.owner);
@@ -188,17 +182,13 @@ contract AssetListing is Initializable, Ownable {
         Asset storage asset = assets[assetId];
         require(asset.collateralAmount > 0, "No collateral to forfeit");
 
-        uint256 collateralAmount = asset.collateralAmount;
         asset.collateralAmount = 0;
-
-        usdc.transfer(owner(), collateralAmount);
     }
 
     // Function to transfer fractional ownership
-    function transferOwnership(uint256 assetId, address from, address to, uint256 shareAmount) external {
+    function transferOwnership(uint256 assetId, address from, address to, uint256 shareAmount) external onlyGovernance {
         require(ownershipShares[assetId][from] >= shareAmount, "Insufficient shares to transfer");
 
-        // Transfer the ownership shares
         ownershipShares[assetId][from] -= shareAmount;
         ownershipShares[assetId][to] += shareAmount;
 
