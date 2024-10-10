@@ -59,12 +59,12 @@ contract AssetListing is Initializable, Ownable {
     }
 
     // Function to sell the asset
-    function sellAsset(uint256 assetId) external onlyGovernance {
+    function sellAsset(uint256 assetId, uint256 valuation) external onlyGovernance {
         Asset storage asset = assets[assetId];
         require(asset.isListed, "Asset is not listed for sale");
         require(asset.totalOwnershipSold == 10000, "Asset is not fully subscribed");
 
-        uint256 salePrice = asset.valuation;
+        uint256 salePrice = valuation;
 
         // Ensure the asset owner deposits USDC equivalent to the sale price
         require(usdc.transferFrom(asset.owner, address(this), salePrice), "USDC deposit failed");
