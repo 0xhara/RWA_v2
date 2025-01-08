@@ -23,6 +23,7 @@ This project demonstrates a blockchain-based platform for tokenizing real-world 
 └── scripts
     └── deploy.s.sol          // Deployment script for contracts
 
+```
 
 ### Concept
 Real-World Asset (RWA) tokenization bridges the gap between physical and digital assets by creating tokenized representations of tangible assets such as real estate, art, and commodities. This platform includes:
